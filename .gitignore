@@ -1,0 +1,12 @@
+node_modules/
+dist/
+
+# 런타임 데이터 / 비밀값
+server/data/
+server/.env
+server/service-stdout.log
+server/service-stderr.log
+
+# 편집기/OS
+.DS_Store
+Thumbs.db

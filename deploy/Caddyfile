@@ -1,0 +1,11 @@
+# 사내 DNS에 등록한 도메인으로 교체하세요 (예: dashboard.company.local).
+# 실제 서버 컴퓨터의 LAN IP를 이 도메인에 A 레코드로 등록해야 합니다.
+dashboard.company.local {
+	# 공인 도메인이 아니므로 Let's Encrypt 대신 Caddy의 로컬 CA로 인증서를 발급한다.
+	# 최초 1회 이 서버에서 `caddy trust`를 실행하고, 생성된 루트 인증서를
+	# 접속할 모든 사내 PC의 "신뢰할 수 있는 루트 인증 기관"에 배포해야 경고 없이 접속된다.
+	tls internal
+
+	# Node 서버는 127.0.0.1:4000에서만 리슨하므로 외부에서는 이 프록시를 통해서만 접근 가능하다.
+	reverse_proxy 127.0.0.1:4000
+}
