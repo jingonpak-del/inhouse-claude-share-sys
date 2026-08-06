@@ -13,13 +13,18 @@ export interface CreateSessionInput {
   allowedTools?: string[];
   createdBy: string;
   assignedUserIds: string[];
+  /**
+   * 서버에 이미 있는 Claude Code 세션의 UUID.
+   * 지정하면 새 대화를 시작하지 않고 그 세션을 이어받는다.
+   */
+  claudeSessionId?: string;
 }
 
 export function createSession(input: CreateSessionInput): ClaudeSessionRow {
   const id = nanoid();
   db.prepare(
-    `INSERT INTO claude_sessions (id, label, model, cwd, permission_mode, allowed_tools, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO claude_sessions (id, label, model, cwd, permission_mode, allowed_tools, claude_session_id, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     input.label,
@@ -27,6 +32,7 @@ export function createSession(input: CreateSessionInput): ClaudeSessionRow {
     input.cwd,
     input.permissionMode,
     input.allowedTools ? JSON.stringify(input.allowedTools) : null,
+    input.claudeSessionId ?? null,
     input.createdBy
   );
   const assign = db.prepare(
@@ -34,6 +40,25 @@ export function createSession(input: CreateSessionInput): ClaudeSessionRow {
   );
   for (const userId of input.assignedUserIds) assign.run(id, userId);
   return getSessionRow(id)!;
+}
+
+/** 이어받은 세션의 지난 대화를 대시보드 기록으로 옮겨 담는다. */
+export function seedMessages(
+  sessionId: string,
+  messages: { role: "user" | "assistant" | "system"; content: string }[]
+): void {
+  const insert = db.prepare(
+    `INSERT INTO messages (id, session_id, role, content) VALUES (?, ?, ?, ?)`
+  );
+  for (const m of messages) insert.run(nanoid(), sessionId, m.role, m.content);
+}
+
+/** 이미 대시보드로 불러온 Claude Code 세션의 UUID 목록. */
+export function getImportedClaudeSessionIds(): string[] {
+  const rows = db
+    .prepare(`SELECT claude_session_id FROM claude_sessions WHERE claude_session_id IS NOT NULL`)
+    .all() as { claude_session_id: string }[];
+  return rows.map((r) => r.claude_session_id);
 }
 
 export function getSessionRow(id: string): ClaudeSessionRow | undefined {

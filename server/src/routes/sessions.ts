@@ -9,7 +9,10 @@ import {
   isUserAssigned,
   archiveSession,
   getSessionRow,
+  seedMessages,
+  getImportedClaudeSessionIds,
 } from "../sessionManager.js";
+import { listDiscoverableSessions, findDiscoverableSession, readTranscriptPreview } from "../claudeSessions.js";
 import type { PermissionMode, User } from "../types.js";
 
 export const sessionsRouter = Router();
@@ -57,6 +60,89 @@ sessionsRouter.post("/", requireRole("master"), (req, res) => {
     assignedUserIds,
   });
   res.status(201).json({ session });
+});
+
+// 서버에 저장돼 있는 Claude Code 세션 목록.
+// 주의: "/:id" 보다 먼저 등록해야 id로 잡히지 않는다.
+sessionsRouter.get("/claude-code", requireRole("master"), async (_req, res) => {
+  try {
+    const [sessions, importedIds] = await Promise.all([
+      listDiscoverableSessions(50),
+      Promise.resolve(getImportedClaudeSessionIds()),
+    ]);
+    const imported = new Set(importedIds);
+    res.json({
+      sessions: sessions.map((s) => ({ ...s, alreadyImported: imported.has(s.sessionId) })),
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: `세션 목록을 읽지 못했습니다: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
+});
+
+// 기존 Claude Code 세션을 대시보드로 가져와 이어서 작업한다.
+sessionsRouter.post("/import", requireRole("master"), async (req, res) => {
+  const { claudeSessionId, label, model, permissionMode, allowedTools, assignedUserIds } = req.body ?? {};
+  if (
+    typeof claudeSessionId !== "string" ||
+    !claudeSessionId.trim() ||
+    typeof model !== "string" ||
+    !model.trim() ||
+    !PERMISSION_MODES.includes(permissionMode) ||
+    !Array.isArray(assignedUserIds) ||
+    assignedUserIds.some((id: unknown) => typeof id !== "string")
+  ) {
+    res.status(400).json({ error: "입력값이 올바르지 않습니다." });
+    return;
+  }
+
+  try {
+    const discovered = await findDiscoverableSession(claudeSessionId);
+    if (!discovered) {
+      res.status(404).json({ error: "해당 Claude Code 세션을 찾을 수 없습니다." });
+      return;
+    }
+    if (!discovered.cwd) {
+      res.status(400).json({ error: "세션의 작업 폴더를 알 수 없어 불러올 수 없습니다." });
+      return;
+    }
+    if (getImportedClaudeSessionIds().includes(claudeSessionId)) {
+      res.status(409).json({ error: "이미 불러온 세션입니다." });
+      return;
+    }
+
+    const session = createSession({
+      label: typeof label === "string" && label.trim() ? label.trim() : discovered.summary,
+      model,
+      cwd: discovered.cwd,
+      permissionMode,
+      allowedTools: Array.isArray(allowedTools) ? allowedTools : undefined,
+      createdBy: req.user!.id,
+      assignedUserIds,
+      claudeSessionId,
+    });
+
+    // 지난 대화를 옮겨 담아 담당자가 맥락을 보고 이어갈 수 있게 한다.
+    const preview = await readTranscriptPreview(discovered);
+    if (preview.messages.length > 0) seedMessages(session.id, preview.messages);
+    if (preview.skipped) {
+      seedMessages(session.id, [
+        {
+          role: "system",
+          content:
+            "이전 대화가 너무 커서 미리보기를 생략했습니다. " +
+            "화면에는 보이지 않지만 Claude는 이전 맥락을 그대로 이어받습니다.",
+        },
+      ]);
+    }
+
+    res.status(201).json({ session, importedMessages: preview.messages.length });
+  } catch (err) {
+    res.status(500).json({
+      error: `세션을 불러오지 못했습니다: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
 });
 
 sessionsRouter.post("/:id/archive", requireRole("master"), (req, res) => {

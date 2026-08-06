@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { api, type PermissionMode, type SessionSummary, type UserSummary } from "../api";
+import {
+  api,
+  type ClaudeCodeSession,
+  type PermissionMode,
+  type SessionSummary,
+  type UserSummary,
+} from "../api";
 import { Chat } from "./Chat";
 
 const MODEL_OPTIONS = ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001"];
@@ -40,6 +46,8 @@ export function AdminDashboard() {
           <CreateUserPanel onCreated={reload} />
         </div>
       </div>
+
+      <ImportSessionPanel users={users} onImported={reload} />
     </div>
   );
 }
@@ -179,6 +187,188 @@ function CreateSessionPanel({ users, onCreated }: { users: UserSummary[]; onCrea
         {error && <div className="error-text">{error}</div>}
         <button type="submit">세션 생성</button>
       </form>
+    </section>
+  );
+}
+
+function formatWhen(ms: number): string {
+  const diffMin = Math.floor((Date.now() - ms) / 60000);
+  if (diffMin < 1) return "방금 전";
+  if (diffMin < 60) return `${diffMin}분 전`;
+  if (diffMin < 60 * 24) return `${Math.floor(diffMin / 60)}시간 전`;
+  const days = Math.floor(diffMin / (60 * 24));
+  if (days < 30) return `${days}일 전`;
+  return new Date(ms).toLocaleDateString("ko-KR");
+}
+
+function formatSize(bytes: number | null): string {
+  if (bytes === null) return "-";
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** 서버 컴퓨터의 Claude 앱에서 진행하던 세션을 대시보드로 가져온다. */
+function ImportSessionPanel({ users, onImported }: { users: UserSummary[]; onImported: () => void }) {
+  const [available, setAvailable] = useState<ClaudeCodeSession[] | null>(null);
+  const [selected, setSelected] = useState<ClaudeCodeSession | null>(null);
+  const [model, setModel] = useState(MODEL_OPTIONS[0]);
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("default");
+  const [assignedUserIds, setAssignedUserIds] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const employees = users.filter((u) => u.role === "employee");
+
+  async function load() {
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await api.listClaudeCodeSessions();
+      setAvailable(res.sessions);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "목록을 불러오지 못했습니다.");
+    }
+  }
+
+  useEffect(() => {
+    load().catch(() => undefined);
+  }, []);
+
+  function toggleUser(id: string) {
+    setAssignedUserIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selected) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await api.importSession({
+        claudeSessionId: selected.sessionId,
+        label: selected.summary,
+        model,
+        permissionMode,
+        assignedUserIds,
+      });
+      setNotice(
+        `'${res.session.label}' 세션을 불러왔습니다. (지난 대화 ${res.importedMessages}건 표시)`
+      );
+      setSelected(null);
+      setAssignedUserIds([]);
+      await load();
+      onImported();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "불러오기 실패");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <h2>기존 세션 불러오기</h2>
+      <p className="muted">
+        서버 컴퓨터의 Claude 앱에서 진행하던 대화를 그대로 이어받습니다. 불러오기 전에 Claude 앱에서
+        해당 세션을 닫아주세요 — 같은 세션을 양쪽에서 동시에 쓰면 대화가 어긋납니다.
+      </p>
+
+      <div className="panel-actions">
+        <button type="button" onClick={load} disabled={busy}>
+          목록 새로고침
+        </button>
+      </div>
+
+      {error && <div className="error-text">{error}</div>}
+      {notice && <div className="notice-text">{notice}</div>}
+
+      {available === null ? (
+        <div className="muted">불러오는 중…</div>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>세션 이름</th>
+              <th>작업 폴더</th>
+              <th>마지막 사용</th>
+              <th>크기</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {available.map((s) => (
+              <tr key={s.sessionId} className={selected?.sessionId === s.sessionId ? "row-selected" : undefined}>
+                <td>{s.summary}</td>
+                <td className="mono">{s.cwd ?? "-"}</td>
+                <td>{formatWhen(s.lastModified)}</td>
+                <td>{formatSize(s.fileSize)}</td>
+                <td>
+                  {s.alreadyImported ? (
+                    <span className="muted">불러옴</span>
+                  ) : (
+                    <button type="button" onClick={() => setSelected(s)} disabled={!s.cwd}>
+                      선택
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {available.length === 0 && (
+              <tr>
+                <td colSpan={5} className="muted">
+                  불러올 수 있는 세션이 없습니다.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      )}
+
+      {selected && (
+        <form onSubmit={submit} className="form">
+          <h3>{selected.summary}</h3>
+          <div className="muted mono">{selected.cwd}</div>
+          <label>
+            모델
+            <select value={model} onChange={(e) => setModel(e.target.value)}>
+              {MODEL_OPTIONS.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            권한 모드
+            <select value={permissionMode} onChange={(e) => setPermissionMode(e.target.value as PermissionMode)}>
+              {PERMISSION_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <fieldset>
+            <legend>담당자 배정</legend>
+            {employees.map((u) => (
+              <label key={u.id} className="checkbox-row">
+                <input type="checkbox" checked={assignedUserIds.includes(u.id)} onChange={() => toggleUser(u.id)} />
+                {u.display_name} ({u.username})
+              </label>
+            ))}
+            {employees.length === 0 && <div className="muted">직원 계정을 먼저 생성하세요.</div>}
+          </fieldset>
+          <div className="panel-actions">
+            <button type="submit" disabled={busy}>
+              {busy ? "불러오는 중…" : "이 세션 불러오기"}
+            </button>
+            <button type="button" className="link-btn" onClick={() => setSelected(null)} disabled={busy}>
+              취소
+            </button>
+          </div>
+        </form>
+      )}
     </section>
   );
 }

@@ -77,6 +77,13 @@ button.danger { background: #d64545; margin-left: 6px; }
 button:disabled { opacity: 0.5; cursor: default; }
 
 .error-text { color: #d64545; font-size: 13px; }
+.notice-text { color: #17743a; font-size: 13px; }
+
+/* 기존 세션 불러오기 패널 */
+.dashboard > .panel { margin-top: 20px; }
+.panel-actions { display: flex; gap: 8px; align-items: center; margin: 10px 0; }
+.row-selected { background: #eef4ff; }
+.form h3 { margin: 4px 0 0; font-size: 15px; }
 
 .badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; }
 .badge.ok { background: #d4f5df; color: #17743a; }
