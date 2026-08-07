@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   api,
   type ClaudeCodeSession,
@@ -215,20 +215,34 @@ function ImportSessionPanel({ users, onImported }: { users: UserSummary[]; onImp
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("default");
   const [assignedUserIds, setAssignedUserIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+  const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
   const employees = users.filter((u) => u.role === "employee");
 
   async function load() {
     setError(null);
     setNotice(null);
+    setLoading(true);
     try {
       const res = await api.listClaudeCodeSessions();
       setAvailable(res.sessions);
+      setLoadedAt(Date.now());
     } catch (err) {
       setError(err instanceof Error ? err.message : "목록을 불러오지 못했습니다.");
+    } finally {
+      setLoading(false);
     }
   }
+
+  const shown = (available ?? []).filter((s) => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return true;
+    return s.summary.toLowerCase().includes(q) || (s.cwd ?? "").toLowerCase().includes(q);
+  });
 
   useEffect(() => {
     load().catch(() => undefined);
@@ -236,6 +250,15 @@ function ImportSessionPanel({ users, onImported }: { users: UserSummary[]; onImp
 
   function toggleUser(id: string) {
     setAssignedUserIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+  }
+
+  /** 선택 즉시 설정 폼이 눈에 들어오도록 스크롤을 맞춰준다. */
+  function selectSession(s: ClaudeCodeSession) {
+    setSelected(s);
+    setNotice(null);
+    requestAnimationFrame(() => {
+      formRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
   }
 
   async function submit(e: React.FormEvent) {
@@ -252,12 +275,12 @@ function ImportSessionPanel({ users, onImported }: { users: UserSummary[]; onImp
         permissionMode,
         assignedUserIds,
       });
-      setNotice(
-        `'${res.session.label}' 세션을 불러왔습니다. (지난 대화 ${res.importedMessages}건 표시)`
-      );
+      const message = `'${res.session.label}' 세션을 불러왔습니다. (지난 대화 ${res.importedMessages}건 표시) 위 '세션 목록'에서 열 수 있습니다.`;
       setSelected(null);
       setAssignedUserIds([]);
+      // load()가 알림을 초기화하므로 목록을 새로 받은 뒤에 성공 메시지를 세운다.
       await load();
+      setNotice(message);
       onImported();
     } catch (err) {
       setError(err instanceof Error ? err.message : "불러오기 실패");
@@ -275,58 +298,29 @@ function ImportSessionPanel({ users, onImported }: { users: UserSummary[]; onImp
       </p>
 
       <div className="panel-actions">
-        <button type="button" onClick={load} disabled={busy}>
-          목록 새로고침
+        <button type="button" onClick={load} disabled={loading || busy}>
+          {loading ? "새로고치는 중…" : "목록 새로고침"}
         </button>
+        <input
+          className="filter-input"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="세션 이름 · 폴더로 검색"
+        />
+        {available !== null && (
+          <span className="muted">
+            {filter.trim() ? `${shown.length} / ${available.length}개` : `${available.length}개`}
+            {loadedAt !== null && ` · ${formatWhen(loadedAt)} 갱신`}
+          </span>
+        )}
       </div>
 
       {error && <div className="error-text">{error}</div>}
       {notice && <div className="notice-text">{notice}</div>}
 
-      {available === null ? (
-        <div className="muted">불러오는 중…</div>
-      ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>세션 이름</th>
-              <th>작업 폴더</th>
-              <th>마지막 사용</th>
-              <th>크기</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {available.map((s) => (
-              <tr key={s.sessionId} className={selected?.sessionId === s.sessionId ? "row-selected" : undefined}>
-                <td>{s.summary}</td>
-                <td className="mono">{s.cwd ?? "-"}</td>
-                <td>{formatWhen(s.lastModified)}</td>
-                <td>{formatSize(s.fileSize)}</td>
-                <td>
-                  {s.alreadyImported ? (
-                    <span className="muted">불러옴</span>
-                  ) : (
-                    <button type="button" onClick={() => setSelected(s)} disabled={!s.cwd}>
-                      선택
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-            {available.length === 0 && (
-              <tr>
-                <td colSpan={5} className="muted">
-                  불러올 수 있는 세션이 없습니다.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      )}
-
+      {/* 선택한 세션의 설정은 표 위에 둔다. 표가 길어서 아래에 두면 화면 밖으로 밀려난다. */}
       {selected && (
-        <form onSubmit={submit} className="form">
+        <form onSubmit={submit} className="form import-form" ref={formRef}>
           <h3>{selected.summary}</h3>
           <div className="muted mono">{selected.cwd}</div>
           <label>
@@ -368,6 +362,51 @@ function ImportSessionPanel({ users, onImported }: { users: UserSummary[]; onImp
             </button>
           </div>
         </form>
+      )}
+
+      {available === null ? (
+        <div className="muted">불러오는 중…</div>
+      ) : (
+        // 세션이 수십 개라 표 자체를 스크롤 영역으로 가둔다.
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>세션 이름</th>
+                <th>작업 폴더</th>
+                <th>마지막 사용</th>
+                <th>크기</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((s) => (
+                <tr key={s.sessionId} className={selected?.sessionId === s.sessionId ? "row-selected" : undefined}>
+                  <td>{s.summary}</td>
+                  <td className="mono">{s.cwd ?? "-"}</td>
+                  <td>{formatWhen(s.lastModified)}</td>
+                  <td>{formatSize(s.fileSize)}</td>
+                  <td>
+                    {s.alreadyImported ? (
+                      <span className="muted">불러옴</span>
+                    ) : (
+                      <button type="button" onClick={() => selectSession(s)} disabled={!s.cwd}>
+                        선택
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {shown.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="muted">
+                    {available.length === 0 ? "불러올 수 있는 세션이 없습니다." : "검색 결과가 없습니다."}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );
