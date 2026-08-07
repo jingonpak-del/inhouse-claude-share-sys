@@ -19,6 +19,8 @@ export interface SessionSummary {
   created_by: string;
   created_at: string;
   assignedUserIds?: string[];
+  /** 서버의 기존 Claude Code 세션을 이어받은 경우에만 값이 있다. */
+  claude_session_id?: string | null;
 }
 
 /** 서버 컴퓨터에 저장돼 있는 Claude Code 세션 (아직 대시보드로 가져오지 않은 것 포함) */
@@ -69,6 +71,10 @@ export const api = {
   }) => request<{ session: SessionSummary }>("/api/sessions", { method: "POST", body: JSON.stringify(input) }),
   archiveSession: (id: string) => request<{ ok: true }>(`/api/sessions/${id}/archive`, { method: "POST" }),
   listClaudeCodeSessions: () => request<{ sessions: ClaudeCodeSession[] }>("/api/sessions/claude-code"),
+  syncSession: (id: string) =>
+    request<{ ok: true; messages: number; lastModified: number }>(`/api/sessions/${id}/sync`, {
+      method: "POST",
+    }),
   importSession: (input: {
     claudeSessionId: string;
     label?: string;

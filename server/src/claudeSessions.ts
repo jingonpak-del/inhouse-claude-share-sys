@@ -15,14 +15,10 @@ export interface DiscoveredSession {
 }
 
 /**
- * 대화 기록을 미리 불러올 최대 파일 크기.
- * 이보다 큰 세션은 전체를 파싱하면 서버가 수 초간 멈추므로 기록 복사를 건너뛴다.
- * (세션을 이어받는 것 자체는 크기와 무관하게 동작한다 — Claude는 맥락을 그대로 유지한다)
+ * 대시보드 채팅창에 표시할 최근 항목 수.
+ * 도구 호출까지 포함하므로 텍스트만 담던 때보다 넉넉히 잡는다.
  */
-const TRANSCRIPT_PREVIEW_MAX_BYTES = 20 * 1024 * 1024;
-
-/** 불러온 뒤 대시보드 채팅창에 표시할 최근 메시지 수 */
-const TRANSCRIPT_PREVIEW_MESSAGES = 60;
+const TRANSCRIPT_PREVIEW_ITEMS = 200;
 
 function toDiscovered(s: {
   sessionId: string;
@@ -60,55 +56,121 @@ export async function findDiscoverableSession(sessionId: string): Promise<Discov
   return info ? toDiscovered(info) : undefined;
 }
 
-/** SDK 메시지에서 사람이 읽을 수 있는 텍스트만 뽑아낸다. */
-function extractText(message: unknown): string {
-  const content = (message as { content?: unknown } | null)?.content;
-  if (typeof content === "string") return content.trim();
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter(
-      (b): b is { type: "text"; text: string } =>
-        !!b && (b as { type?: unknown }).type === "text" && typeof (b as { text?: unknown }).text === "string"
-    )
-    .map((b) => b.text)
-    .join("\n")
-    .trim();
+/** 도구 호출에서 무엇을 대상으로 했는지 뽑아낸다. */
+const TOOL_ARG_KEYS = ["file_path", "path", "notebook_path", "command", "pattern", "url", "query", "prompt", "description"];
+
+function toolTarget(input: unknown): string | null {
+  const obj = (input ?? {}) as Record<string, unknown>;
+  for (const key of TOOL_ARG_KEYS) {
+    const v = obj[key];
+    if (typeof v === "string" && v.trim()) {
+      const oneLine = v.replace(/\s+/g, " ").trim();
+      return oneLine.length > 120 ? `${oneLine.slice(0, 120)}…` : oneLine;
+    }
+  }
+  return null;
 }
 
-export interface TranscriptPreview {
-  messages: { role: "user" | "assistant"; content: string }[];
-  /** 파일이 너무 커서 기록 복사를 건너뛴 경우 true */
-  skipped: boolean;
+interface ToolCall {
+  name: string;
+  target: string | null;
 }
 
 /**
- * 세션의 최근 대화를 읽어 대시보드에 옮겨 담을 형태로 반환한다.
+ * 연달아 실행된 도구 호출을 한 줄로 묶는다.
  *
- * 기록을 못 읽어도 세션 이어받기 자체는 가능하므로, 실패는 예외로 올리지 않고
- * 빈 결과로 처리한다.
+ * 실제 세션은 도구 호출이 대화 텍스트의 열 배가 넘어서, 하나씩 늘어놓으면
+ * 정작 읽어야 할 대화가 묻힌다.
  */
-export async function readTranscriptPreview(session: DiscoveredSession): Promise<TranscriptPreview> {
-  if (session.fileSize !== null && session.fileSize > TRANSCRIPT_PREVIEW_MAX_BYTES) {
-    return { messages: [], skipped: true };
+function summarizeToolRun(run: ToolCall[]): string {
+  if (run.length === 1) {
+    const only = run[0];
+    return only.target ? `🔧 ${only.name} — ${only.target}` : `🔧 ${only.name}`;
   }
 
+  const counts = new Map<string, number>();
+  for (const c of run) counts.set(c.name, (counts.get(c.name) ?? 0) + 1);
+  const names = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, n]) => (n > 1 ? `${name}×${n}` : name))
+    .join(", ");
+
+  const targets: string[] = [];
+  for (const c of run) {
+    if (c.target && !targets.includes(c.target)) targets.push(c.target);
+    if (targets.length === 3) break;
+  }
+  const tail = targets.length ? `\n${targets.map((t) => `· ${t}`).join("\n")}` : "";
+  return `🔧 도구 ${run.length}회 — ${names}${tail}`;
+}
+
+export interface TranscriptEntry {
+  role: "user" | "assistant" | "tool";
+  content: string;
+}
+
+/**
+ * 세션 기록을 대시보드에 옮겨 담을 형태로 변환한다.
+ *
+ * 실제 작업 세션은 대부분이 도구 호출이고 대화 텍스트는 몇 건뿐이다.
+ * 텍스트만 남기면 "무슨 작업을 했는지"가 통째로 사라지므로 도구 호출도
+ * 한 줄 요약으로 함께 담는다. (thinking과 tool_result는 양이 많고 그 자체로는
+ * 읽을 거리가 아니라서 제외한다)
+ *
+ * 기록을 못 읽어도 이어받기 자체는 가능하므로 실패는 빈 결과로 처리한다.
+ */
+export async function readTranscript(session: DiscoveredSession): Promise<TranscriptEntry[]> {
   let raw;
   try {
     raw = await getSessionMessages(session.sessionId, session.cwd ? { dir: session.cwd } : undefined);
   } catch {
-    return { messages: [], skipped: true };
+    return [];
   }
 
-  const messages: { role: "user" | "assistant"; content: string }[] = [];
+  const entries: TranscriptEntry[] = [];
+  let pendingTools: ToolCall[] = [];
+
+  const flushTools = () => {
+    if (pendingTools.length === 0) return;
+    entries.push({ role: "tool", content: summarizeToolRun(pendingTools) });
+    pendingTools = [];
+  };
+
   for (const m of raw) {
     if (m.type !== "user" && m.type !== "assistant") continue;
     // 서브에이전트 대화는 메인 흐름과 섞이면 읽기 어려우므로 제외한다.
     if (m.parent_agent_id !== null) continue;
-    const text = extractText(m.message);
-    if (!text) continue;
-    messages.push({ role: m.type, content: text });
-  }
 
-  // 오래된 대화는 잘라내고 최근 것만 보여준다.
-  return { messages: messages.slice(-TRANSCRIPT_PREVIEW_MESSAGES), skipped: false };
+    const content = (m.message as { content?: unknown } | null)?.content;
+
+    if (typeof content === "string") {
+      const t = content.trim();
+      if (t) {
+        flushTools();
+        entries.push({ role: m.type, content: t });
+      }
+      continue;
+    }
+    if (!Array.isArray(content)) continue;
+
+    for (const block of content) {
+      const type = (block as { type?: unknown } | null)?.type;
+      if (type === "text") {
+        const t = (block as { text?: unknown }).text;
+        if (typeof t === "string" && t.trim()) {
+          flushTools();
+          entries.push({ role: m.type, content: t.trim() });
+        }
+      } else if (type === "tool_use") {
+        const b = block as { name?: unknown; input?: unknown };
+        if (typeof b.name === "string") {
+          pendingTools.push({ name: b.name, target: toolTarget(b.input) });
+        }
+      }
+    }
+  }
+  flushTools();
+
+  // 오래된 기록은 잘라내고 최근 것만 보여준다.
+  return entries.slice(-TRANSCRIPT_PREVIEW_ITEMS);
 }

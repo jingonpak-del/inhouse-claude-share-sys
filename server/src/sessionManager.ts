@@ -45,12 +45,26 @@ export function createSession(input: CreateSessionInput): ClaudeSessionRow {
 /** 이어받은 세션의 지난 대화를 대시보드 기록으로 옮겨 담는다. */
 export function seedMessages(
   sessionId: string,
-  messages: { role: "user" | "assistant" | "system"; content: string }[]
+  messages: { role: "user" | "assistant" | "system" | "tool"; content: string }[]
 ): void {
   const insert = db.prepare(
     `INSERT INTO messages (id, session_id, role, content) VALUES (?, ?, ?, ?)`
   );
   for (const m of messages) insert.run(nanoid(), sessionId, m.role, m.content);
+}
+
+/**
+ * 저장된 기록을 원본 세션 기준으로 통째로 교체한다.
+ *
+ * 대시보드에서 주고받은 메시지도 결국 같은 세션 파일에 쌓이므로,
+ * 덧붙이지 않고 갈아끼워야 중복이 생기지 않는다.
+ */
+export function replaceMessages(
+  sessionId: string,
+  messages: { role: "user" | "assistant" | "system" | "tool"; content: string }[]
+): void {
+  db.prepare(`DELETE FROM messages WHERE session_id = ?`).run(sessionId);
+  seedMessages(sessionId, messages);
 }
 
 /** 이미 대시보드로 불러온 Claude Code 세션의 UUID 목록. */
@@ -105,6 +119,11 @@ export function archiveSession(id: string): void {
     runtime.stop();
     runtimes.delete(id);
   }
+}
+
+/** 이미 떠 있는 런타임이 있으면 반환한다 (없어도 새로 만들지 않는다). */
+export function peekRuntime(id: string): ClaudeSessionRuntime | undefined {
+  return runtimes.get(id);
 }
 
 export function getRuntime(id: string): ClaudeSessionRuntime | undefined {

@@ -44,13 +44,25 @@ export class ClaudeSessionRuntime {
     this.clients.delete(client);
   }
 
-  private sendHistoryTo(client: WSClient): void {
+  private historyEvent(): string {
+    // created_at은 초 단위라 한 번에 담긴 기록은 값이 모두 같다.
+    // 넣은 순서를 유지하려면 rowid로 정렬해야 한다.
     const rows = db
       .prepare(
-        `SELECT role, content, created_at FROM messages WHERE session_id = ? ORDER BY created_at ASC`
+        `SELECT role, content, created_at FROM messages WHERE session_id = ? ORDER BY rowid ASC`
       )
       .all(this.id) as { role: string; content: string; created_at: string }[];
-    client.send(JSON.stringify({ type: "history", messages: rows } satisfies OutboundEvent));
+    return JSON.stringify({ type: "history", messages: rows } satisfies OutboundEvent);
+  }
+
+  private sendHistoryTo(client: WSClient): void {
+    client.send(this.historyEvent());
+  }
+
+  /** 기록을 원본과 다시 맞춘 뒤, 보고 있는 모든 사람의 화면을 갱신한다. */
+  broadcastHistory(): void {
+    const data = this.historyEvent();
+    for (const c of this.clients) c.send(data);
   }
 
   private broadcast(event: OutboundEvent): void {

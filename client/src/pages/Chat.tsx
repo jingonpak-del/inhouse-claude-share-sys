@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { OutboundEvent } from "../wsTypes";
-import type { SessionSummary } from "../api";
+import { api, type SessionSummary } from "../api";
 
 interface FeedItem {
   key: string;
@@ -20,6 +20,8 @@ export function Chat({ session, onBack }: { session: SessionSummary; onBack: () 
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [connected, setConnected] = useState(false);
   const [input, setInput] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -51,7 +53,8 @@ export function Chat({ session, onBack }: { session: SessionSummary; onBack: () 
       setFeed(
         event.messages.map((m) => ({
           key: nextKey(),
-          kind: m.role === "user" ? "user" : "assistant",
+          // 이어받은 세션의 기록에는 도구 호출 요약('tool')도 섞여 있다.
+          kind: m.role === "user" ? "user" : m.role === "tool" ? "tool_result" : "assistant",
           text: m.content,
         }))
       );
@@ -96,6 +99,19 @@ export function Chat({ session, onBack }: { session: SessionSummary; onBack: () 
     }
   }
 
+  /** PC에서 이어서 작업한 내용을 다시 가져온다. 서버가 갱신된 기록을 push해준다. */
+  async function sync() {
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      await api.syncSession(session.id);
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "동기화 실패");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   function send() {
     if (!input.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     wsRef.current.send(JSON.stringify({ type: "user_message", text: input }));
@@ -117,8 +133,14 @@ export function Chat({ session, onBack }: { session: SessionSummary; onBack: () 
           <strong>{session.label}</strong>
           <span className="muted"> · {session.model} · {session.cwd}</span>
         </div>
+        {session.claude_session_id && (
+          <button className="secondary" onClick={sync} disabled={syncing}>
+            {syncing ? "가져오는 중…" : "대화 새로고침"}
+          </button>
+        )}
         <span className={`badge ${connected ? "ok" : "off"}`}>{connected ? "연결됨" : "연결 끊김"}</span>
       </div>
+      {syncError && <div className="error-text">{syncError}</div>}
 
       <div className="chat-feed">
         {feed.map((item) => (

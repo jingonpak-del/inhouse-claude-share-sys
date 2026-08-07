@@ -27,7 +27,7 @@ export interface ClaudeSessionRow {
 export interface MessageRow {
   id: string;
   session_id: string;
-  role: "user" | "assistant" | "system";
+  role: "user" | "assistant" | "system" | "tool";
   content: string;
   created_at: string;
 }

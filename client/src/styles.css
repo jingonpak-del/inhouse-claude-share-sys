@@ -74,6 +74,7 @@ button {
   color: white;
 }
 button.danger { background: #d64545; margin-left: 6px; }
+button.secondary { background: #5b6b85; margin-left: 6px; }
 button:disabled { opacity: 0.5; cursor: default; }
 
 .error-text { color: #d64545; font-size: 13px; }

@@ -64,10 +64,33 @@ function SessionListPanel({
   onChanged: () => void;
 }) {
   const userName = (id: string) => users.find((u) => u.id === id)?.display_name ?? id;
+  const [syncing, setSyncing] = useState<string | null>(null);
+  const [syncNote, setSyncNote] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  async function sync(s: SessionSummary) {
+    setSyncing(s.id);
+    setSyncNote(null);
+    setSyncError(null);
+    try {
+      const res = await api.syncSession(s.id);
+      setSyncNote(`'${s.label}' 최신 기록 ${res.messages}건으로 맞췄습니다.`);
+      onChanged();
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "동기화 실패");
+    } finally {
+      setSyncing(null);
+    }
+  }
 
   return (
     <section className="panel">
       <h2>세션 목록</h2>
+      <p className="muted">
+        PC의 Claude 앱에서 이어서 작업했다면 '대화 새로고침'을 눌러 최신 내역을 가져오세요.
+      </p>
+      {syncNote && <div className="notice-text">{syncNote}</div>}
+      {syncError && <div className="error-text">{syncError}</div>}
       <table className="table">
         <thead>
           <tr>
@@ -91,6 +114,11 @@ function SessionListPanel({
               <td>{s.status === "active" ? "활성" : "보관됨"}</td>
               <td>
                 <button onClick={() => onOpen(s)}>열기</button>
+                {s.status === "active" && s.claude_session_id && (
+                  <button className="secondary" onClick={() => sync(s)} disabled={syncing === s.id}>
+                    {syncing === s.id ? "가져오는 중…" : "대화 새로고침"}
+                  </button>
+                )}
                 {s.status === "active" && (
                   <button
                     className="danger"
