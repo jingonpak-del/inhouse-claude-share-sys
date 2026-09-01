@@ -1,0 +1,43 @@
+# 총괄(팀장) 프로필 설정 예시
+# 위치: ~/.hermes/profiles/lead/config.yaml
+#
+# 핵심: 팀장은 "직접 일하지 않고 쪼개서 배정"해야 한다.
+# 실무 툴을 빼놓으면 하고 싶어도 못 하므로 실제로 분배를 한다.
+
+model:
+  provider: "anthropic"
+  default: "claude-opus-4.7"   # 분해·배정 판단은 프론티어 모델 값어치를 한다
+
+agent:
+  # 팀장에게서 실무 실행 수단을 제거한다.
+  # (칸반/메모리/메신저 도구는 남는다 — 배정과 보고에 필요하다)
+  disabled_toolsets:
+    - terminal
+    - code_execution
+    - browser
+
+kanban:
+  dispatch_in_gateway: true        # 디스패처는 게이트웨이 프로세스 안에서 돈다(기본값)
+  dispatch_interval_seconds: 60    # 카드 승격/스폰 주기
+  review_dispatch: true            # 리뷰 단계도 에이전트가 맡게 할지
+
+slack:
+  require_mention: true
+  allowed_channels:
+    - "C0111111111"   # #프로젝트-A
+    - "C0222222222"   # #경영-업무요청
+
+# 팀장이 다른 헤르메스 봇의 메시지를 받아야 할 때만 켠다.
+# "mentions" = 그 메시지가 나를 명시적으로 @멘션했을 때만 수락 → 봇끼리 무한 루프 차단.
+platforms:
+  slack:
+    extra:
+      allow_bots: mentions
+
+# 팀장이 직접 짧은 조사를 병렬로 돌릴 때의 상한.
+# 깊이는 비용이 곱으로 늘어난다(3x3x3 = 말단 27개). 2면 대부분 충분.
+delegation:
+  max_concurrent_children: 3
+  max_spawn_depth: 2
+  model: "claude-sonnet-4-6"
+  provider: "anthropic"
