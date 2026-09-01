@@ -1,0 +1,47 @@
+# B안: 슬랙 앱 하나로 여러 프로필을 운영하기 (멀티플렉싱 + 채널 라우팅)
+#
+# 위치: 기본 프로필의 ~/.hermes/config.yaml  (멀티플렉서는 기본 프로필이 소유한다)
+#
+# A안(에이전트마다 슬랙 앱 1개)과의 차이
+#   - 슬랙에 보이는 봇은 하나. 방을 옮기면 담당 인격이 바뀐다.
+#   - 게이트웨이 프로세스가 하나뿐이라 관리가 단순하다.
+#   - 대신 프로세스 격리가 없다 — 하나가 죽으면 전부 멈춘다.
+#
+# 켠 뒤에는 하위 프로필에서 `hermes -p <이름> gateway start`를 하면 안 된다(하드 에러).
+# 기본 게이트웨이 하나만 관리한다.
+
+gateway:
+  multiplex_profiles: true
+
+  # 서비스할 프로필을 명시한다. (기본 프로필은 항상 포함되므로 적지 않아도 된다)
+  # 비워 두면 호스트의 모든 프로필을 서비스한다.
+  multiplex_profile_allowlist:
+    - designer
+    - marketer
+    - perf
+
+  # 하나의 봇 토큰을 여러 방이 공유할 때, 방마다 담당 프로필을 지정한다.
+  # 매칭은 구체적인 것 우선(thread_id > chat_id > guild_id), 선언한 필드는 모두 만족해야 한다.
+  # 어느 route에도 안 걸린 메시지는 기본 프로필이 받는다.
+  profile_routes:
+    - name: design-room
+      platform: slack
+      chat_id: "C0123456789"     # #디자인
+      profile: designer
+
+    - name: marketing-room
+      platform: slack
+      chat_id: "C0222222222"     # #마케팅
+      profile: marketer
+
+    - name: perf-room
+      platform: slack
+      chat_id: "C0333333333"     # #퍼포먼스
+      profile: perf
+
+# 주의
+#  - profile_routes는 multiplex_profiles: true 일 때만 동작한다.
+#  - route가 가리키는 프로필이 설치돼 있지 않거나 allowlist 밖이면 그 메시지는 거부된다
+#    (기본 프로필로 넘어가지 않는다).
+#  - 라우팅되면 해당 프로필의 config·스킬·메모리·SOUL·프로바이더 키까지 전부 그 프로필 것으로
+#    해석된다. 크리덴셜은 프로필 간에 공유되지 않는다.
