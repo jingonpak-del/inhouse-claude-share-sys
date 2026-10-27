@@ -1,6 +1,6 @@
 # 다른 PC 설치 방법과 작업 기록 (2026-10-27 기준)
 
-더줌 인스타그램(@the_zum_) · 스레드 자동화를 다른 컴퓨터에서 쓰거나 이어서 고칠 때 읽는 문서입니다.
+인스타그램 · 스레드 자동화(더줌 @the_zum_ 외 여러 계정)를 다른 컴퓨터에서 쓰거나 이어서 고칠 때 읽는 문서입니다.
 매일 쓰는 법과 토큰 발급 방법은 [README.md](../README.md) 에 있습니다.
 
 ---
@@ -26,8 +26,12 @@
 
 ### 2) 내려받기와 패키지 설치
 
+이 프로그램은 이제 사내 저장소 `inhouse-claude-share-sys` 의 `sns자동화/` 폴더에 있습니다
+(예전 단독 저장소 `insta-thread-auto` 에서 옮겨 와 여러 계정용으로 넓혔습니다).
+
 ```bash
-git clone https://github.com/jingonpak-del/insta-thread-auto.git sns자동화
+git clone https://github.com/jingonpak-del/inhouse-claude-share-sys.git
+cd inhouse-claude-share-sys/sns자동화
 ```
 
 ```bash
@@ -44,17 +48,21 @@ pip install -r requirements.txt
 | 키 | 받는 곳 |
 |---|---|
 | `CLAUDE_CODE_OAUTH_TOKEN` | 새 PC 터미널에서 `claude setup-token` |
-| `INSTAGRAM_ACCESS_TOKEN` | Meta 개발자 앱 → Instagram → API 설정 → 토큰 생성 |
-| `THREADS_ACCESS_TOKEN` | Meta 개발자 앱 → Threads → 사용자 토큰 생성기 |
+| `<계정키>_INSTAGRAM_ACCESS_TOKEN` | Meta 개발자 앱 → Instagram → API 설정 → 토큰 생성 (계정마다) |
+| `<계정키>_THREADS_ACCESS_TOKEN` | Meta 개발자 앱 → Threads → 사용자 토큰 생성기 (계정마다) |
+
+- `<계정키>` 는 `config.json` 의 `accounts` 키를 대문자로 쓴 것입니다(예: `THEZUM_`, `BEAUTYINFO_`, `LOCALINFO_`).
+- 더줌은 예전 이름 `INSTAGRAM_ACCESS_TOKEN` · `THREADS_ACCESS_TOKEN` 도 그대로 읽습니다.
 
 - 서버 PC는 토큰을 일주일마다 자동으로 새로 받습니다.
-  - 새로 받은 토큰은 `data/state.json` 에 저장되고 `.env` 에는 반영되지 않습니다.
+  - 새로 받은 토큰은 `data/state.json` 에 계정·채널별(`thezum:threads` 등)로 저장되고 `.env` 에는 반영되지 않습니다.
   - 그래서 `.env` 의 옛 토큰을 옮겨 왔다가 만료되었다면, 새로 발급하거나 서버 PC의 `data/state.json` 을 함께 옮겨야 합니다.
 
 ### 4) 폴더 위치에 따라 고칠 설정 (`config.json`)
 
 서버 PC에서는 이 폴더가 `C:\Users\admin\클로드\외부광고기록_정다혜\sns자동화` 에 있어서, 아래 상대 경로가 맞게 잡혀 있습니다.
-다른 PC에서는 이 경로들이 없을 수 있습니다.
+다른 PC에서는 이 경로들이 없을 수 있습니다. 사내 저장소 안(`inhouse-claude-share-sys\sns자동화`)에서 돌리면 상대 경로가 달라지므로
+아래 값을 **절대 경로**로 바꿔 주세요(예: `C:\\Users\\admin\\클로드\\외부광고기록_정다혜\\public\\mom-img`).
 
 | 설정 | 서버 PC 값 | 하는 일 | 다른 PC에서 |
 |---|---|---|---|
@@ -69,7 +77,7 @@ pip install -r requirements.txt
 python sns.py status
 ```
 
-- `@the_zum_ 연결됨` 같은 줄이 인스타·스레드 각각 나오면 정상입니다.
+- `[더줌] 인스타그램: @the_zum_ 연결됨` 같은 줄이 계정·채널마다 나오면 정상입니다.
 
 ```bash
 python sns.py web
@@ -84,6 +92,17 @@ powershell -ExecutionPolicy Bypass -File 작업스케줄러_등록.ps1
 
 ---
 
+### 6) 서버 PC를 여러 계정 버전으로 바꾸기
+
+서버 PC는 지금 예전 단독 저장소 버전(계정 하나)으로 돌고 있습니다. 바꿀 때는 이렇게 합니다.
+
+1. 작업 스케줄러 두 개(`SNS자동화_10분`, `SNS자동화_확인화면`)를 잠시 끕니다.
+2. 서버 PC 폴더(`외부광고기록_정다혜\sns자동화`)의 `snsauto/`, `sns.py`, `config.json`, `brands/`, `README.md`, `docs/`, `.env.example` 을
+   이 폴더 것으로 바꿉니다. `brand.md` 는 `brands/thezum.md` 로 옮겨졌으니 서버 PC에서 고친 내용이 있으면 그쪽에 옮겨 적습니다.
+   **`.env` 와 `data/` 는 그대로 둡니다** — 예전 게시글·답글·토큰은 자동으로 더줌 계정 것으로 읽힙니다.
+3. `config.json` 의 `dry_run` · `public_image_dir` 등 서버 PC 값이 그대로인지 확인하고, `python sns.py status` 로 `[더줌]` 두 줄이 연결됨인지 봅니다.
+4. 작업 스케줄러를 다시 켭니다.
+
 ## 3. 구조 한눈에 보기
 
 ```
@@ -95,8 +114,12 @@ snsauto/writer.py  Claude 로 글·답글 쓰기 (구독: claude.exe -p 헤드�
 snsauto/meta.py    인스타그램 Graph API / Threads API (발행, 댓글, 답글, 토큰 갱신)
 snsauto/images.py  사진 비율 맞추기(4:5~1.91:1, 흰 여백), 공개 폴더 복사, Codex AI 이미지
 snsauto/common.py  설정·.env 읽기, JSON 저장(잠금 파일), 옛 카페 이름 자동 교정·검사
-brand.md           말투 가이드 (Claude 가 그대로 읽음)
+brands/*.md        계정별 말투 가이드 (Claude 가 그대로 읽음)
+config.json        accounts: 계정마다 이름·말투 파일·채널·발행 시각·금지어·모의 실행
 ```
+
+- 게시글·답글·소재에는 `account`(계정 키)가 붙습니다. 없으면(예전 기록) `accounts` 맨 위 계정(더줌) 것입니다.
+- 댓글은 계정마다 그 계정을 처음 확인한 시각 이후 것만 답합니다(`state.json` 의 `started_by_account`).
 
 ### 기술 메모
 
@@ -191,6 +214,19 @@ if (CONFIG.snsUrl && (!(CONFIG.snsUsers || []).length || CONFIG.snsUsers.indexOf
 9. '지금 발행' 버튼을 두 번 누르기 방식으로 바꿨습니다.
 10. '함께 키우는 아이, 함께 만드는 미래' 저출생 대응 경남지역연대 캠페인 글의 초안을 만들었습니다.
     - 확인 대기 상태이며 아직 발행 전입니다.
+
+## 7. 작업 기록 (2026-10-27, 여러 계정)
+
+1. 사내 저장소 `inhouse-claude-share-sys` 의 `sns자동화/` 로 옮겼습니다(원본 `insta-thread-auto@cb58fb0`).
+2. 여러 계정을 다루도록 바꿨습니다.
+   - `config.json` 의 `accounts` 에 계정마다 말투 파일·채널·발행 시각·금지어·모의 실행을 둡니다.
+   - 토큰은 `.env` 의 `<계정키>_INSTAGRAM_ACCESS_TOKEN` 식으로 계정마다 받습니다. 더줌은 예전 이름도 읽습니다.
+   - 확인 화면에 계정 탭과 소재 등록의 '올릴 계정' 선택을 넣었습니다.
+   - 예약 시각, 토큰 갱신, 댓글 확인을 계정마다 따로 셉니다.
+3. 뷰티인포(`beautyinfo`) · 지역정보(`localinfo`) 계정을 꺼 둔 상태(모의 실행)로 추가하고 말투 가이드 초안을 만들었습니다.
+   - 사이트 이름·주소·대상·스레드 말투는 `(채워 주세요)` 로 남겨 두었습니다.
+4. 모의 실행 시험으로 확인했습니다: 계정별 초안·예약·발행(모의), 예전 데이터와 토큰 그대로 읽기, 금지어 자동 교정, 계정별 댓글 시작 시각.
+   - 실제 Meta API 와 Claude 호출은 이 시험에서 부르지 않았습니다.
 
 ### 아직 확인하지 못한 것
 

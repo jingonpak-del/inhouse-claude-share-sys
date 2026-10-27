@@ -1,4 +1,4 @@
-"""Claude 로 채널별 게시글과 답댓글 초안을 쓴다. 말투는 brand.md 를 따른다.
+"""Claude 로 채널별 게시글과 답댓글 초안을 쓴다. 말투는 계정마다 config 의 brand 파일(brands/*.md)을 따른다.
 
 config.json 의 claude_backend:
   "subscription" — Claude 월구독(Pro·Max)으로 로그인한 Claude Code 를 불러 쓴다(API 요금 없음).
@@ -54,9 +54,9 @@ def _client():
         raise WriterError('Claude API 키가 없어요. .env 의 ANTHROPIC_API_KEY 에 넣어 주세요.')
 
 
-def _system():
-    brand = (ROOT / 'brand.md').read_text(encoding='utf-8')
-    return ('당신은 주식회사 더줌의 SNS 담당자입니다. 아래 말투 가이드를 그대로 따라 글을 씁니다.\n'
+def _system(acc):
+    brand = resolve(acc['brand']).read_text(encoding='utf-8')
+    return (f"당신은 {acc.get('who') or acc['name']}의 SNS 담당자입니다. 아래 말투 가이드를 그대로 따라 글을 씁니다.\n"
             '출력은 지정된 JSON 형식으로만 합니다.\n\n' + brand)
 
 
@@ -71,13 +71,13 @@ def _claude_exe():
     return found
 
 
-def _ask_subscription(content, schema, effort):
+def _ask_subscription(content, schema, effort, acc):
     """Claude Code 를 비대화형(-p)으로 한 번 불러 JSON 결과를 받는다. 도구는 모두 끈다."""
     cfg = config()
     cmd = [_claude_exe(), '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
            '--json-schema', json.dumps(schema), '--tools', '', '--no-session-persistence',
            '--strict-mcp-config', '--model', cfg['claude_model'], '--effort', effort,
-           '--system-prompt', _system()]
+           '--system-prompt', _system(acc)]
     if isinstance(content, str):
         content = [{'type': 'text', 'text': content}]
     msg = json.dumps({'type': 'user', 'message': {'role': 'user', 'content': content}}, ensure_ascii=False)
@@ -117,15 +117,15 @@ def _ask_subscription(content, schema, effort):
         raise WriterError('Claude 응답을 읽지 못했어요. 다시 시도해 주세요.')
 
 
-def _ask(content, schema, effort, max_tokens=16000):
+def _ask(content, schema, effort, acc, max_tokens=16000):
     cfg = config()
     if cfg.get('claude_backend', 'subscription') != 'api':
-        return _ask_subscription(content, schema, effort)
+        return _ask_subscription(content, schema, effort, acc)
     try:
         r = _client().beta.messages.create(
             model=cfg['claude_model'],
             max_tokens=max_tokens,
-            system=_system(),
+            system=_system(acc),
             messages=[{'role': 'user', 'content': content}],
             output_config={'effort': effort, 'format': {'type': 'json_schema', 'schema': schema}},
             # 안전 분류기가 드물게 거절하면 서버가 다른 모델로 다시 써 준다
@@ -161,7 +161,7 @@ def _image_block(path):
                                         'data': base64.b64encode(buf.getvalue()).decode()}}
 
 
-def write_posts(material, extra=''):
+def write_posts(material, acc, extra=''):
     """소재 하나로 인스타·스레드 글과 AI 이미지 설명을 만든다."""
     cfg = config()
     lines = [
@@ -177,7 +177,7 @@ def write_posts(material, extra=''):
         f"[소재 내용]\n{material.get('body', '')}",
     ]
     if material.get('link'):
-        lines.append(f"[카페 글 주소] {material['link']}")
+        lines.append(f"[관련 글 주소] {material['link']}")
     if material.get('deadline'):
         lines.append(f"[신청 마감] {material['deadline']}")
     if material.get('image_hint'):
@@ -188,13 +188,13 @@ def write_posts(material, extra=''):
         lines.append(f"\n[다시 쓰기 요청] {extra}")
     content = [_image_block(resolve(p)) for p in material.get('images', [])[:3]]
     content.append({'type': 'text', 'text': '\n'.join(lines)})
-    out = _ask(content, POST_SCHEMA, effort='medium')
+    out = _ask(content, POST_SCHEMA, effort='medium', acc=acc)
     for p in ('instagram', 'threads'):
-        out[p]['text'] = fix_names(out[p]['text'].strip())
+        out[p]['text'] = fix_names(out[p]['text'].strip(), acc)
     return out
 
 
-def write_reply(platform, post_text, comment_text, username, extra=''):
+def write_reply(platform, post_text, comment_text, username, acc, extra=''):
     lines = [
         f"{PLATFORM_KO[platform]} 게시글에 달린 댓글에 답글 초안을 써 주세요.",
         '- kind: simple(칭찬·감사·태그 등 단순), inquiry(문의), complaint(불만), sensitive(환불·개인정보·당첨 확인 등), spam(광고·무의미)',
@@ -207,6 +207,6 @@ def write_reply(platform, post_text, comment_text, username, extra=''):
     ]
     if extra:
         lines.append(f"\n[다시 쓰기 요청] {extra}")
-    out = _ask('\n'.join(lines), REPLY_SCHEMA, effort='low', max_tokens=4000)
-    out['reply'] = fix_names(out['reply'].strip())
+    out = _ask('\n'.join(lines), REPLY_SCHEMA, effort='low', acc=acc, max_tokens=4000)
+    out['reply'] = fix_names(out['reply'].strip(), acc)
     return out

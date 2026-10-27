@@ -34,6 +34,45 @@ def config():
         return json.load(f)
 
 
+# ---------------- 계정 ----------------
+# config.json 의 accounts 에 계정(브랜드·제품·사이트)마다 말투 파일, 채널, 발행 시각, 토큰 이름을 적는다.
+# 맨 위 계정이 기본 계정이다. account 표시가 없는 예전 게시글·답글·소재는 기본 계정 것으로 본다.
+
+def accounts(cfg=None, everything=False):
+    """{키: 계정 설정} — 꺼 둔 계정(enabled: false)은 everything=True 일 때만 들어간다."""
+    cfg = cfg or config()
+    return {k: {**a, 'key': k} for k, a in cfg['accounts'].items() if everything or a.get('enabled', True)}
+
+
+def default_key(cfg=None):
+    return next(iter((cfg or config())['accounts']))
+
+
+def account(key=None, cfg=None):
+    cfg = cfg or config()
+    key = key or default_key(cfg)
+    if key not in cfg['accounts']:
+        raise ValueError(f"config.json 의 accounts 에 '{key}' 계정이 없어요.")
+    return {**cfg['accounts'][key], 'key': key}
+
+
+def account_of(item, cfg=None):
+    """게시글·답글·소재가 속한 계정."""
+    return account(item.get('account'), cfg)
+
+
+def account_name(key, cfg=None):
+    cfg = cfg or config()
+    key = key or default_key(cfg)
+    return cfg['accounts'].get(key, {}).get('name', key)
+
+
+def is_dry(acc, cfg=None):
+    """전체 dry_run 이 켜져 있거나 그 계정만 dry_run 이면 모의 실행."""
+    cfg = cfg or config()
+    return bool(cfg.get('dry_run') or acc.get('dry_run'))
+
+
 def resolve(rel):
     """config 에 적힌 상대 경로는 이 폴더 기준으로 푼다."""
     p = Path(rel)
@@ -148,25 +187,32 @@ def find(items, item_id):
 
 
 # ---------------- 글 점검 ----------------
-# 옛 카페 이름은 쓰지 않는다. '김해줌마렐라' 안에 '김해줌마'가 들어 있으므로 뒤에 '렐라'가 오면 괜찮다.
-BANNED = [(re.compile(r'마산맘'), '창원줌마렐라'), (re.compile(r'김해줌마(?!렐라)'), '김해줌마렐라')]
+# 계정마다 쓰지 않는 말을 config 의 replace_words 에 [정규식, 바꿀 말] 로 적는다.
+# 예) 더줌: '마산맘' → '창원줌마렐라'. '김해줌마렐라' 안에 '김해줌마'가 들어 있어서 '김해줌마(?!렐라)' 로 적는다.
+
+def _banned(acc):
+    return [(re.compile(pat), repl) for pat, repl in acc.get('replace_words', [])]
 
 
-def fix_names(text):
-    for pat, repl in BANNED:
+def fix_names(text, acc):
+    """Claude 가 쓴 글의 금지어는 자동으로 바꾼다."""
+    for pat, repl in _banned(acc):
         text = pat.sub(repl, text)
     return text
 
 
-def check_text(platform, text, cfg=None):
+def check_text(platform, text, acc, cfg=None):
     """발행 전에 걸리는 문제를 사람이 읽을 문장으로 돌려준다. 빈 목록이면 통과."""
     cfg = cfg or config()
     out = []
     if not text.strip():
         out.append('글이 비어 있어요.')
-    for pat, repl in BANNED:
-        if pat.search(text):
-            out.append(f"옛 카페 이름이 들어 있어요 → '{repl}'로 바꿔 주세요.")
+    if platform not in acc.get('channels', PLATFORMS):
+        out.append(f"{acc['name']} 계정은 {PLATFORM_KO[platform]}에 연결돼 있지 않아요.")
+    for pat, repl in _banned(acc):
+        m = pat.search(text)
+        if m:
+            out.append(f"'{m.group(0)}'은(는) 쓰지 않는 말이에요 → '{repl}'로 바꿔 주세요.")
     if platform == 'threads' and len(text) > cfg['threads_max_chars']:
         out.append(f"스레드는 {cfg['threads_max_chars']}자까지예요(지금 {len(text)}자).")
     if platform == 'instagram':

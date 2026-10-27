@@ -7,7 +7,7 @@ import time
 
 import requests
 
-from .common import config, edit, env, iso, load, log, new_id, now, parse_iso
+from .common import account, config, default_key, edit, env, is_dry, iso, load, log, new_id, now, parse_iso
 
 
 class MetaError(Exception):
@@ -17,10 +17,33 @@ class MetaError(Exception):
 TOKEN_ENV = {'instagram': 'INSTAGRAM_ACCESS_TOKEN', 'threads': 'THREADS_ACCESS_TOKEN'}
 
 
-def token(platform):
+def token_env(platform, acc):
+    """.env 에서 읽을 토큰 이름. 계정 키가 beautyinfo 면 BEAUTYINFO_THREADS_ACCESS_TOKEN 처럼 붙인다."""
+    prefix = acc.get('env_prefix') or acc['key'].upper()
+    return f'{prefix}_{TOKEN_ENV[platform]}'
+
+
+def env_token(platform, acc):
+    """.env 토큰과 그 이름. legacy_env 계정은 예전 이름(INSTAGRAM_ACCESS_TOKEN)도 본다."""
+    name = token_env(platform, acc)
+    if env(name) or not acc.get('legacy_env'):
+        return env(name), name
+    return env(TOKEN_ENV[platform]), TOKEN_ENV[platform]
+
+
+def saved_token(st, platform, acc):
+    """state.json 에 저장해 둔 갱신 토큰. 예전에는 채널 이름만으로 저장했다(기본 계정)."""
+    tokens = st.get('tokens', {})
+    saved = tokens.get(f"{acc['key']}:{platform}")
+    if saved is None and acc.get('legacy_env') and acc['key'] == default_key():
+        saved = tokens.get(platform)
+    return saved or {}
+
+
+def token(platform, acc):
     """갱신해 둔 토큰이 있으면 그것을, 없으면 .env 의 토큰을 쓴다."""
-    saved = load('state').get('tokens', {}).get(platform, {})
-    first = env(TOKEN_ENV[platform])
+    saved = saved_token(load('state'), platform, acc)
+    first, _ = env_token(platform, acc)
     # .env 에 새 토큰을 넣으면 그게 우선이다(갱신본은 같은 .env 토큰에서 나온 것만 쓴다)
     if saved.get('token') and saved.get('from_env') == first[-12:]:
         return saved['token']
@@ -32,18 +55,20 @@ class Client:
     refresh_url = ''
     refresh_grant = ''
 
-    def __init__(self):
+    def __init__(self, acc):
         self.cfg = config()
-        self.dry = bool(self.cfg.get('dry_run'))
+        self.acc = acc
+        self.dry = is_dry(acc, self.cfg)
         self.base = self.cfg[f'{self.platform}_api']
-        self.tok = token(self.platform)
+        self.tok = token(self.platform, acc)
 
     def ready(self):
         return self.dry or bool(self.tok)
 
     def _call(self, method, path, **params):
         if not self.tok:
-            raise MetaError(f'{self.platform} 토큰이 없어요. .env 에 {TOKEN_ENV[self.platform]} 를 넣어 주세요.')
+            raise MetaError(f'{self.acc["name"]} {self.platform} 토큰이 없어요. '
+                            f'.env 에 {token_env(self.platform, self.acc)} 를 넣어 주세요.')
         url = path if path.startswith('http') else f'{self.base}/{path.lstrip("/")}'
         params['access_token'] = self.tok
         try:
@@ -72,16 +97,16 @@ class Client:
             return False
         body = self._call('GET', self.refresh_url, grant_type=self.refresh_grant)
         with edit('state') as st:
-            st.setdefault('tokens', {})[self.platform] = {
+            st.setdefault('tokens', {})[f"{self.acc['key']}:{self.platform}"] = {
                 'token': body['access_token'], 'refreshed_at': iso(now()),
-                'expires_in': body.get('expires_in'), 'from_env': env(TOKEN_ENV[self.platform])[-12:],
+                'expires_in': body.get('expires_in'), 'from_env': env_token(self.platform, self.acc)[0][-12:],
             }
         self.tok = body['access_token']
         return True
 
     def _fake(self, what, **kw):
         fid = 'dry-' + new_id()
-        log('dry_run', platform=self.platform, what=what, id=fid, **kw)
+        log('dry_run', account=self.acc['key'], platform=self.platform, what=what, id=fid, **kw)
         return fid
 
 
@@ -224,8 +249,8 @@ class Threads(Client):
         return self._post(media_type='TEXT', text=text, reply_to_id=comment_id)
 
 
-def client(platform):
-    return {'instagram': Instagram, 'threads': Threads}[platform]()
+def client(platform, acc=None):
+    return {'instagram': Instagram, 'threads': Threads}[platform](acc or account())
 
 
 def comment_time(ts):

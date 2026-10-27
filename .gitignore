@@ -10,3 +10,7 @@ server/service-stderr.log
 # 편집기/OS
 .DS_Store
 Thumbs.db
+
+# SNS 자동화 — 토큰과 운영 데이터 (sns자동화/.gitignore 와 같은 내용, 혹시 몰라 한 번 더)
+sns자동화/.env
+sns자동화/data/

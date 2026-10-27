@@ -1,5 +1,7 @@
 """확인 화면: 소재 등록, 게시글 확인·승인, 답글 확인·등록, 설정.
 
+계정이 여럿이면 위쪽 계정 탭(?a=계정키)으로 골라 본다. 비워 두면 모든 계정.
+
 이 컴퓨터에서는 http://localhost:3088 로 로그인 없이 열린다.
 밖에서는 https://sns.zumma.kr — zumma.kr 대시보드의 📱 SNS자동화 버튼이 붙여 주는 서명 토큰(/sso?t=)으로만 들어온다.
 """
@@ -10,8 +12,9 @@ from flask import (Flask, abort, flash, redirect, render_template_string, reques
                    url_for)
 
 from . import images, jobs
-from .common import (KST, PLATFORM_KO, PLATFORMS, ROOT, check_text, config, edit, find, iso, job_lock, load,
-                     log, new_id, now, parse_iso, resolve)
+from .common import (KST, PLATFORM_KO, PLATFORMS, ROOT, account_name, account_of, accounts, check_text,
+                     config, default_key, edit, find, is_dry, iso, job_lock, load, log, new_id, now, parse_iso,
+                     resolve)
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 60 * 1024 * 1024
@@ -99,6 +102,20 @@ def background(fn, *a):
     threading.Thread(target=run, daemon=True).start()
 
 
+def cur_account():
+    """지금 보고 있는 계정 키(?a=). 비어 있으면 모든 계정."""
+    a = request.args.get('a', '')
+    return a if a in accounts() else ''
+
+
+def mine(items, a):
+    """계정 a 의 것만. a 가 비어 있으면 전부. account 가 없는 예전 기록은 기본 계정 것."""
+    if not a:
+        return items
+    dkey = default_key()
+    return [x for x in items if (x.get('account') or dkey) == a]
+
+
 def to_local_input(s):
     return parse_iso(s).strftime('%Y-%m-%dT%H:%M') if s else ''
 
@@ -142,15 +159,16 @@ def posts():
     tab = request.args.get('f', 'draft')
     if tab not in POST_TABS:
         tab = 'draft'
-    allp = load('posts')
-    mats = {m['id']: m for m in load('materials')}
+    a = cur_account()
+    allp = mine(load('posts'), a)
+    mats = {m['id']: m for m in mine(load('materials'), a)}
     rows = [p for p in allp if p['status'] in POST_TABS[tab][1]]
     rows.sort(key=lambda p: p.get('scheduled_at') or p['created'], reverse=(tab in ('published', 'rejected')))
     counts = {k: sum(p['status'] in v[1] for p in allp) for k, v in POST_TABS.items()}
     pending = [m for m in mats.values() if m['status'] in ('new', 'processing')]
     errors = [m for m in mats.values() if m['status'] == 'error']
     for p in rows:
-        p['problems'] = check_text(p['platform'], p['text'])
+        p['problems'] = check_text(p['platform'], p['text'], account_of(p))
     return page('posts', POST_PAGE, tab=tab, tabs=POST_TABS, rows=rows, mats=mats, counts=counts,
                 pending=pending, errors=errors)
 
@@ -174,7 +192,8 @@ def post_action(pid, action):
                     find(ps, pid)['approved_by'] = who()
                 log('approved', post=pid, who=who())
                 p = find(load('posts'), pid)
-                flash(f"승인했어요. {fmt(p['scheduled_at'])}에 {PLATFORM_KO[p['platform']]}에 올라갑니다.", 'ok')
+                flash(f"승인했어요. {fmt(p['scheduled_at'])}에 {account_name(p.get('account'))} "
+                      f"{PLATFORM_KO[p['platform']]}에 올라갑니다.", 'ok')
         else:
             flash('저장했어요.', 'ok')
     elif action == 'unapprove':
@@ -227,22 +246,27 @@ def post_action(pid, action):
 def new_material():
     if request.method == 'POST':
         f = request.form
-        chans = [p for p in PLATFORMS if f.get(p)]
-        if not f.get('body', '').strip() or not chans:
-            flash('내용과 채널을 하나 이상 넣어 주세요.', 'err')
+        acc = accounts().get(f.get('account', ''))
+        if not acc:
+            flash('올릴 계정을 골라 주세요.', 'err')
             return redirect(url_for('new_material'))
+        chans = [p for p in PLATFORMS if f.get(p) and p in acc['channels']]
+        if not f.get('body', '').strip() or not chans:
+            flash(f"내용과 채널을 하나 이상 넣어 주세요. {acc['name']} 계정은 "
+                  f"{', '.join(PLATFORM_KO[c] for c in acc['channels'])}에 연결돼 있어요.", 'err')
+            return redirect(url_for('new_material', a=acc['key']))
         pics = [images.save_upload(fo, fo.filename) for fo in request.files.getlist('images') if fo.filename]
-        m = {'id': new_id(), 'created': iso(now()), 'status': 'new', 'error': '',
+        m = {'id': new_id(), 'account': acc['key'], 'created': iso(now()), 'status': 'new', 'error': '',
              'title': f.get('title', '').strip(), 'body': f['body'].strip(), 'link': f.get('link', '').strip(),
              'deadline': f.get('deadline', '').strip(), 'channels': chans, 'images': pics,
              'ai_image': bool(f.get('ai_image')) and not pics, 'image_hint': f.get('image_hint', '').strip()}
         with edit('materials') as ms:
             ms.append(m)
-        log('material', material=m['id'], title=m['title'])
+        log('material', material=m['id'], account=acc['key'], title=m['title'])
         background(jobs.process_materials)
         flash('소재를 등록했어요. 초안을 만드는 중이에요(1~2분, AI 이미지는 5~10분). 잠시 뒤 새로고침해 주세요.', 'ok')
-        return redirect(url_for('posts'))
-    return page('new', NEW_PAGE)
+        return redirect(url_for('posts', a=acc['key']))
+    return page('new', NEW_PAGE, pick=cur_account() or default_key())
 
 
 @app.post('/material/<mid>/retry')
@@ -266,7 +290,7 @@ def replies():
     tab = request.args.get('f', 'pending')
     if tab not in REPLY_TABS:
         tab = 'pending'
-    allr = load('replies')
+    allr = mine(load('replies'), cur_account())
     rows = sorted([r for r in allr if r['status'] in REPLY_TABS[tab][1]], key=lambda r: r['created'],
                   reverse=True)
     counts = {k: sum(r['status'] in v[1] for r in allr) for k, v in REPLY_TABS.items()}
@@ -323,19 +347,25 @@ def settings():
         log('settings', who=who(), reply_mode=request.form.get('reply_mode'))
         flash('설정을 저장했어요.', 'ok')
         return redirect(url_for('settings'))
-    return page('settings', SETTINGS_PAGE, s=load('settings'), status=jobs.status(), cfg=config())
+    return page('settings', SETTINGS_PAGE, s=load('settings'), status=jobs.status())
 
 
 def page(active, body, **kw):
+    cfg = config()
+    a = cur_account()
+    accts = accounts(cfg)
+    for acc in accts.values():
+        acc['dry'] = is_dry(acc, cfg)
     return render_template_string(LAYOUT.replace('{BODY}', body), active=active, ko=PLATFORM_KO,
-                                  dry=config().get('dry_run'), me=session.get('name', ''),
-                                  zumma=config()['zumma_url'],
-                                  n_reply=sum(r['status'] in ('pending', 'failed') for r in load('replies')),
-                                  n_draft=sum(p['status'] == 'draft' for p in load('posts')), **kw)
+                                  dry=cfg.get('dry_run'), me=session.get('name', ''),
+                                  zumma=cfg['zumma_url'], a=a, accts=accts, multi=len(accts) > 1,
+                                  aname=lambda k: account_name(k, cfg),
+                                  n_reply=sum(r['status'] in ('pending', 'failed') for r in mine(load('replies'), a)),
+                                  n_draft=sum(p['status'] == 'draft' for p in mine(load('posts'), a)), **kw)
 
 
 LAYOUT = r'''<!doctype html><html lang="ko"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>더줌 SNS 자동화</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>SNS 자동화</title>
 <style>
 :root{--bg:#f6f5f2;--card:#fff;--ink:#222;--sub:#6b6b6b;--line:#e3e1dc;--acc:#e0457b;--ok:#2f8f5b;--warn:#b7791f;--err:#c53030;--ig:#c13584;--th:#111}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,"Malgun Gothic",sans-serif}
@@ -367,14 +397,23 @@ button.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:
 .comment{background:#f3f2ef;border-radius:8px;padding:10px;margin:8px 0}details summary{cursor:pointer;color:var(--sub);font-size:13px}
 .empty{color:var(--sub);text-align:center;padding:40px 0}a{color:var(--acc)}
 button.armed{background:var(--err);border-color:var(--err);color:#fff;font-weight:600}
+.accts{display:flex;gap:6px;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--line)}
+.accts a{padding:3px 10px;border-radius:99px;color:var(--sub);text-decoration:none;font-size:13px;border:1px solid var(--line)}
+.accts a.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.acct{font-size:12px;padding:2px 8px;border-radius:6px;background:#efeeea;color:var(--ink)}
 </style></head><body>
-<header><div class="wrap top"><span class="brand">더줌 SNS</span>
-<nav><a href="/posts" class="{{'on' if active=='posts'}}">게시글 {% if n_draft %}<span class="badge">{{n_draft}}</span>{% endif %}</a>
-<a href="/new" class="{{'on' if active=='new'}}">소재 등록</a>
-<a href="/replies" class="{{'on' if active=='replies'}}">답댓글 {% if n_reply %}<span class="badge">{{n_reply}}</span>{% endif %}</a>
+{% set q = '?a=' ~ a if a else '' %}
+<header><div class="wrap top"><span class="brand">SNS 자동화</span>
+<nav><a href="/posts{{q}}" class="{{'on' if active=='posts'}}">게시글 {% if n_draft %}<span class="badge">{{n_draft}}</span>{% endif %}</a>
+<a href="/new{{q}}" class="{{'on' if active=='new'}}">소재 등록</a>
+<a href="/replies{{q}}" class="{{'on' if active=='replies'}}">답댓글 {% if n_reply %}<span class="badge">{{n_reply}}</span>{% endif %}</a>
 <a href="/settings" class="{{'on' if active=='settings'}}">설정</a></nav>
 {% if dry %}<span class="dry">모의 실행 중</span>{% endif %}
-{% if me %}<span class="meta" style="{{'' if dry else 'margin-left:auto'}}">{{me}} · <a href="{{zumma}}">대시보드</a></span>{% endif %}</div></header>
+{% if me %}<span class="meta" style="{{'' if dry else 'margin-left:auto'}}">{{me}} · <a href="{{zumma}}">대시보드</a></span>{% endif %}</div>
+{% if multi and active in ('posts','replies','new') %}<div class="wrap accts">
+ {% if active != 'new' %}<a href="?" class="{{'on' if not a}}">전체 계정</a>{% endif %}
+ {% for k, acc in accts.items() %}<a href="?a={{k}}" class="{{'on' if a==k}}">{{acc.name}}{% if acc.dry and not dry %} (모의){% endif %}</a>{% endfor %}
+</div>{% endif %}</header>
 <main class="wrap">
 {% for cat,msg in get_flashed_messages(with_categories=true) %}<div class="flash {{cat}}">{{msg}}</div>{% endfor %}
 {BODY}
@@ -402,13 +441,13 @@ document.addEventListener('click', function (e) {
 </script></body></html>'''
 
 POST_PAGE = r'''
-<div class="tabs">{% for k,v in tabs.items() %}<a href="?f={{k}}" class="{{'on' if tab==k}}">{{v[0]}} {{counts[k]}}</a>{% endfor %}</div>
+<div class="tabs">{% for k,v in tabs.items() %}<a href="?f={{k}}{{'&a=' ~ a if a}}" class="{{'on' if tab==k}}">{{v[0]}} {{counts[k]}}</a>{% endfor %}</div>
 {% for m in pending %}<div class="note">⏳ '{{m.title or m.body[:20]}}' 초안을 만드는 중이에요… (새로고침해서 확인)</div>{% endfor %}
 {% for m in errors %}<div class="prob">'{{m.title or m.body[:20]}}' 초안 만들기 실패: {{m.error}}
 <form method="post" action="/material/{{m.id}}/retry" style="display:inline"><button>다시 시도</button></form></div>{% endfor %}
 {% for p in rows %}{% set m = mats.get(p.material_id, {}) %}
 <div class="card">
- <div class="row"><span class="plat {{p.platform}}">{{ko[p.platform]}}</span><b>{{m.title or '(제목 없음)'}}</b>
+ <div class="row">{% if multi %}<span class="acct">{{aname(p.account)}}</span>{% endif %}<span class="plat {{p.platform}}">{{ko[p.platform]}}</span><b>{{m.title or '(제목 없음)'}}</b>
   <span class="meta">{% if p.scheduled_at %}· 예약 {{p.scheduled_at|fmt}}{% endif %}{% if p.published_at %}· 발행 {{p.published_at|fmt}}{% endif %}{% if p.dry_run %} (모의){% endif %}</span>
   {% if p.permalink %}<a href="{{p.permalink}}" target="_blank" class="meta">게시물 보기 ↗</a>{% endif %}</div>
  <div class="thumbs">{% for im in p.images %}<figure><img src="/file/{{im}}">
@@ -442,18 +481,22 @@ POST_PAGE = r'''
   <form method="post" action="/post/{{p.id}}/rewrite" class="row" style="margin-top:8px">
   <input name="extra" class="full" placeholder="예) 더 짧게, 마감 임박 강조, 이모지 줄이기"><button>다시 쓰기</button></form></details>{% endif %}
 </div>
-{% else %}<div class="empty">{{'확인할 게시글이 없어요. 소재 등록에서 이벤트·체험단 내용을 넣어 주세요.' if tab=='draft' else '없어요.'}}</div>{% endfor %}
+{% else %}<div class="empty">{{'확인할 게시글이 없어요. 소재 등록에서 알릴 내용을 넣어 주세요.' if tab=='draft' else '없어요.'}}</div>{% endfor %}
 '''
 
 NEW_PAGE = r'''
 <div class="card"><form method="post" enctype="multipart/form-data">
+ <div class="field"><b>올릴 계정 *</b>{% for k, acc in accts.items() %}<label class="chk"><input type="radio" name="account" value="{{k}}" {{'checked' if k==pick}}>{{acc.name}}
+  <span class="meta">({% for c in acc.channels %}{{ko[c]}}{{', ' if not loop.last}}{% endfor %})</span></label>{% endfor %}
+  <div class="help">계정마다 말투(brands 폴더의 말투 가이드)와 발행 시각이 따로예요.</div></div>
  <div class="field"><b>제목</b><input name="title" class="full" placeholder="예) 김해 키즈카페 체험단 10가족 모집"></div>
- <div class="field"><b>내용 *</b><textarea name="body" required placeholder="카페 공지 내용을 그대로 붙여 넣어도 돼요. 일정·장소·대상·혜택·신청 방법을 넣어 주세요."></textarea>
+ <div class="field"><b>내용 *</b><textarea name="body" required placeholder="알릴 내용을 그대로 붙여 넣어도 돼요(카페 공지, 사이트 글, 제품 소개 등). 일정·장소·대상·혜택·신청 방법을 넣어 주세요."></textarea>
   <div class="help">여기 적힌 사실만 글에 들어가요. 없는 정보는 지어내지 않고 '확인할 점'으로 알려 드려요.</div></div>
- <div class="field"><b>카페 글 주소</b><input name="link" type="url" class="full" placeholder="https://cafe.naver.com/..."></div>
+ <div class="field"><b>관련 글 주소</b><input name="link" type="url" class="full" placeholder="https://cafe.naver.com/... 또는 사이트 글 주소"></div>
  <div class="field"><b>신청 마감</b><input name="deadline" placeholder="예) 11월 5일(수) 자정"></div>
  <div class="field"><b>올릴 채널 *</b><label class="chk"><input type="checkbox" name="instagram" checked>인스타그램</label>
-  <label class="chk"><input type="checkbox" name="threads" checked>스레드</label></div>
+  <label class="chk"><input type="checkbox" name="threads" checked>스레드</label>
+  <div class="help">고른 계정에 연결되지 않은 채널은 빼고 만들어요.</div></div>
  <div class="field"><b>사진</b><input type="file" name="images" multiple accept="image/*">
   <div class="help">여러 장이면 넘겨 보는 게시물(캐러셀)로 올라가요. 인스타그램 10장, 스레드 20장까지.</div></div>
  <div class="field"><label class="chk"><input type="checkbox" name="ai_image">사진이 없으면 AI로 카드 이미지 만들기</label>
@@ -462,10 +505,10 @@ NEW_PAGE = r'''
 </form></div>'''
 
 REPLY_PAGE = r'''
-<div class="row" style="justify-content:space-between"><div class="tabs">{% for k,v in tabs.items() %}<a href="?f={{k}}" class="{{'on' if tab==k}}">{{v[0]}} {{counts[k]}}</a>{% endfor %}</div>
+<div class="row" style="justify-content:space-between"><div class="tabs">{% for k,v in tabs.items() %}<a href="?f={{k}}{{'&a=' ~ a if a}}" class="{{'on' if tab==k}}">{{v[0]}} {{counts[k]}}</a>{% endfor %}</div>
 <form method="post" action="/check-comments"><button>지금 댓글 확인</button></form></div>
 {% for r in rows %}<div class="card">
- <div class="row"><span class="plat {{r.platform}}">{{ko[r.platform]}}</span><span class="meta">{{r.created|fmt}} · 분류: {{kind_ko.get(r.kind, r.kind)}}{% if r.needs_human %} · ⚠️ 직접 확인 필요{% endif %}</span>
+ <div class="row">{% if multi %}<span class="acct">{{aname(r.account)}}</span>{% endif %}<span class="plat {{r.platform}}">{{ko[r.platform]}}</span><span class="meta">{{r.created|fmt}} · 분류: {{kind_ko.get(r.kind, r.kind)}}{% if r.needs_human %} · ⚠️ 직접 확인 필요{% endif %}</span>
  {% if r.permalink %}<a href="{{r.permalink}}" target="_blank" class="meta">게시물 ↗</a>{% endif %}</div>
  <details><summary>게시글 내용</summary><div class="meta" style="white-space:pre-wrap">{{r.post_text}}</div></details>
  <div class="comment"><b>@{{r.username}}</b> {{r.comment_text}}</div>
@@ -496,7 +539,7 @@ a{display:inline-block;margin-top:14px;background:#e0457b;color:#fff;text-decora
 
 SETTINGS_PAGE = r'''
 <div class="card"><b>연결 상태</b><ul>{% for s in status %}<li>{{s}}</li>{% endfor %}</ul>
-<div class="help">모의 실행 끄기·발행 시각 바꾸기는 <code>config.json</code>, 토큰은 <code>.env</code> 에서 고칩니다.</div></div>
+<div class="help">계정 추가·모의 실행 끄기·발행 시각 바꾸기는 <code>config.json</code>, 토큰은 <code>.env</code>, 말투는 <code>brands/</code> 에서 고칩니다.</div></div>
 <div class="card"><form method="post">
  <div class="field"><b>답댓글 방식</b>
   <label class="chk"><input type="radio" name="reply_mode" value="approve" {{'checked' if s.reply_mode!='auto'}}>승인 후 등록</label>
@@ -504,4 +547,5 @@ SETTINGS_PAGE = r'''
  <div class="field"><label class="chk"><input type="checkbox" name="hold_sensitive" {{'checked' if s.hold_sensitive}}>완전 자동이어도 불만·민감·답하기 어려운 문의는 확인 대기로 남기기 (추천)</label></div>
  <button class="pri">저장</button></form></div>
 <div class="card"><b>발행 시각</b>
-{% for p, times in cfg.slots.items() %}<div>{{ko[p]}}: {{times|join(', ')}} (하루 최대 {{times|length}}개)</div>{% endfor %}</div>'''
+{% for k, acc in accts.items() %}<div style="margin-top:6px"><b>{{acc.name}}</b>{% if acc.dry %} <span class="meta">(모의 실행)</span>{% endif %}
+{% for p in acc.channels %}<div>{{ko[p]}}: {{acc.slots[p]|join(', ')}} (하루 최대 {{acc.slots[p]|length}}개)</div>{% endfor %}</div>{% endfor %}</div>'''
