@@ -1,0 +1,39 @@
+{
+  "_설명": "더줌 SNS 자동화 설정. 토큰·API 키는 여기 말고 .env 에 넣는다. 고친 뒤 확인 화면을 새로고침하면 바로 적용된다.",
+
+  "dry_run": false,
+  "_dry_run": "true 면 인스타·스레드에 실제로 올리지 않고 기록만 남긴다(모의 실행). 토큰을 넣고 연결 확인이 끝나면 false 로 바꾼다.",
+
+  "claude_backend": "subscription",
+  "_claude_backend": "subscription = Claude 월구독으로 로그인한 Claude Code 사용(.env 의 CLAUDE_CODE_OAUTH_TOKEN), api = Claude API 키 사용(사용량 과금)",
+  "claude_model": "claude-opus-5-5",
+
+  "slots": {
+    "instagram": ["11:30", "19:30"],
+    "threads": ["08:30", "12:30", "21:00"]
+  },
+  "_slots": "채널별 하루 발행 시각. 시각 개수가 그 채널의 하루 최대 게시 수. 승인하면 비어 있는 가장 가까운 시각에 예약된다.",
+
+  "comment_check_minutes": 30,
+  "comment_lookback_posts": 10,
+  "_comment": "몇 분마다 댓글을 확인할지, 최근 몇 개 게시물의 댓글을 볼지.",
+
+  "instagram_max_hashtags": 5,
+  "threads_max_chars": 500,
+  "instagram_max_chars": 2200,
+
+  "public_image_dir": "../public/mom-img",
+  "public_image_base_url": "https://mom.zumma.kr/mom/img/",
+  "_public_image": "인스타·스레드는 이미지를 인터넷 주소로만 받는다. 기존 mom.zumma.kr 그림 경로를 그대로 쓴다(서버 수정 불필요).",
+
+  "codex_image_script": "../../codex이미지/codex_image.py",
+
+  "instagram_api": "https://graph.instagram.com/v23.0",
+  "threads_api": "https://graph.threads.net/v1.0",
+
+  "web_port": 3088,
+
+  "zumma_server_dir": "../../업무관리/office-work-manage/server",
+  "zumma_url": "https://zumma.kr",
+  "_zumma": "sns.zumma.kr 로 들어올 때는 zumma.kr 로그인(📱 SNS자동화 버튼의 서명 토큰)이 있어야 열린다. 이 컴퓨터에서 localhost:3088 로 열 때는 로그인 없이 열린다."
+}
